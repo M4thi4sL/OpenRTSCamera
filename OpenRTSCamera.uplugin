@@ -7,7 +7,7 @@
 	"DocsURL": "https://github.com/HeyZoos/OpenRTSCamera/wiki",
 	"EnabledByDefault": true,
 	"EngineVersion": "5.5.0",
-	"FileVersion": 4,
+	"FileVersion": 3,
 	"FriendlyName": "OpenRTSCamera",
 	"Installed": false,
 	"IsBetaVersion": false,

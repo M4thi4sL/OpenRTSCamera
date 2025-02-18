@@ -4,8 +4,9 @@
 
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
-#include "RTSSelectable.h"
 #include "Kismet/GameplayStatics.h"
+#include "RTSHUD.h"
+#include "Interfaces/RTSSelection.h"
 
 // Sets default values for this component's properties
 URTSSelector::URTSSelector(): PlayerController(nullptr), HUD(nullptr), bIsSelecting(false)
@@ -19,8 +20,8 @@ URTSSelector::URTSSelector(): PlayerController(nullptr), HUD(nullptr), bIsSelect
 		BeginSelectionActionFinder(TEXT("/OpenRTSCamera/Inputs/BeginSelection"));
 	static ConstructorHelpers::FObjectFinder<UInputMappingContext>
 		InputMappingContextFinder(TEXT("/OpenRTSCamera/Inputs/OpenRTSCameraInputs"));
-	this->BeginSelection = BeginSelectionActionFinder.Object;
-	this->InputMappingContext = InputMappingContextFinder.Object;
+	BeginSelection = BeginSelectionActionFinder.Object;
+	InputMappingContext = InputMappingContextFinder.Object;
 }
 
 
@@ -29,12 +30,12 @@ void URTSSelector::BeginPlay()
 {
 	Super::BeginPlay();
 
-	const auto NetMode = this->GetNetMode();
+	const auto NetMode = GetNetMode();
 	if (NetMode != NM_DedicatedServer)
 	{
-		this->CollectComponentDependencyReferences();
-		this->BindInputMappingContext();
-		this->BindInputActions();
+		CollectComponentDependencyReferences();
+		BindInputMappingContext();
+		BindInputActions();
 		OnActorsSelected.AddDynamic(this, &URTSSelector::HandleSelectedActors);
 	}
 }
@@ -43,56 +44,50 @@ void URTSSelector::HandleSelectedActors_Implementation(const TArray<AActor*>& Ne
 {
 	// Convert NewSelectedActors to a set for efficient lookup
 	TSet<AActor*> FilteredSelectedActors;
-	for (const auto& Actor : NewSelectedActors)
+	
+	for (AActor* Actor : NewSelectedActors)
 	{
-		if (Actor && this->CanSelectActor(Actor))
+		if (Actor && Actor->Implements<URTSSelection>())
 		{
 			FilteredSelectedActors.Add(Actor);
 		}
 	}
 
-	// Iterate over currently selected actors
-	for (const auto& Selected : this->SelectedActors)
+	// Iterate over currently selected actors and deselect those that are no longer selected.
+	for (AActor* Selected : SelectedActors)
 	{
-		// Check if the actor is not in the new selection
-		if (!FilteredSelectedActors.Contains(Selected->GetOwner()))
+		if (Selected && !FilteredSelectedActors.Contains(Selected))
 		{
-			// Call OnDeselected for actors that are no longer selected
-			Selected->OnDeselected();
+			if (Selected && Selected->Implements<URTSSelection>())
+			{
+				IRTSSelection::Execute_OnDeselected(Selected);
+	
+			}
 		}
 	}
 
-	// Clear the current selection
-	ClearSelectedActors();
-    
+	// Clear the current selection AFTER deselecting actors
+	SelectedActors.Empty();	
+	
 	// Add new selected actors and call OnSelected
-	for (const auto& Actor : NewSelectedActors)
+	for (AActor* Actor : FilteredSelectedActors)
 	{
-		if (URTSSelectable* SelectableComponent = Actor->FindComponentByClass<URTSSelectable>())
-		{
-			this->SelectedActors.Add(SelectableComponent);
-			SelectableComponent->OnSelected();
-		}
+		SelectedActors.Add(Actor);
+		IRTSSelection::Execute_OnSelected(Actor);
 	}
 }
 
 void URTSSelector::ClearSelectedActors_Implementation()
 {
-	this->SelectedActors.Empty();
-}
-
-// Called every frame
-void URTSSelector::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
-{
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	SelectedActors.Empty();
 }
 
 void URTSSelector::CollectComponentDependencyReferences()
 {
-	if (const auto PlayerControllerRef = UGameplayStatics::GetPlayerController(this->GetWorld(), 0))
+	if (const auto PlayerControllerRef = UGameplayStatics::GetPlayerController(GetWorld(), 0))
 	{
-		this->PlayerController = PlayerControllerRef;
-		this->HUD = Cast<ARTSHUD>(PlayerControllerRef->GetHUD());
+		PlayerController = PlayerControllerRef;
+		HUD = Cast<ARTSHUD>(PlayerControllerRef->GetHUD());
 	}
 	else
 	{
@@ -104,31 +99,31 @@ void URTSSelector::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 {
 	if (const auto InputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
-		InputComponent->BindAction(this->BeginSelection, ETriggerEvent::Started, this, &URTSSelector::OnSelectionStart);
-		InputComponent->BindAction(this->BeginSelection, ETriggerEvent::Completed, this, &URTSSelector::OnSelectionEnd);
+		InputComponent->BindAction(BeginSelection, ETriggerEvent::Started, this, &URTSSelector::OnSelectionStart);
+		InputComponent->BindAction(BeginSelection, ETriggerEvent::Completed, this, &URTSSelector::OnSelectionEnd);
 	}
 }
 
 void URTSSelector::BindInputActions()
 {
-	if (const auto EnhancedInputComponent = Cast<UEnhancedInputComponent>(this->PlayerController->InputComponent))
+	if (const auto EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerController->InputComponent))
 	{
 		EnhancedInputComponent->BindAction(
-			this->BeginSelection,
+			BeginSelection,
 			ETriggerEvent::Started,
 			this,
 			&URTSSelector::OnSelectionStart
 		);
 
 		EnhancedInputComponent->BindAction(
-			this->BeginSelection,
+			BeginSelection,
 			ETriggerEvent::Triggered,
 			this,
 			&URTSSelector::OnUpdateSelection
 		);
 
 		EnhancedInputComponent->BindAction(
-			this->BeginSelection,
+			BeginSelection,
 			ETriggerEvent::Completed,
 			this,
 			&URTSSelector::OnSelectionEnd
@@ -145,10 +140,10 @@ void URTSSelector::BindInputMappingContext()
 			PlayerController->bShowMouseCursor = true;
 
 			// Check if the context is already bound to prevent double binding
-			if (!Input->HasMappingContext(this->InputMappingContext))
+			if (!Input->HasMappingContext(InputMappingContext))
 			{
 				Input->ClearAllMappings();
-				Input->AddMappingContext(this->InputMappingContext, 0);
+				Input->AddMappingContext(InputMappingContext, 0);
 			}
 		}
 	}
@@ -173,8 +168,4 @@ void URTSSelector::OnSelectionEnd(const FInputActionValue& Value)
 {
 	// Call PerformSelection on the HUD to execute selection logic
 	HUD->EndSelection();
-}
-
-bool URTSSelector::CanSelectActor_Implementation(AActor *Actor) const {
-	return true;	
 }
