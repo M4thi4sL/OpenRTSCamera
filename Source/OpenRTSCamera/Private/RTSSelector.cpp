@@ -8,7 +8,6 @@
 #include "RTSHUD.h"
 #include "Interfaces/RTSSelection.h"
 
-// Sets default values for this component's properties
 URTSSelector::URTSSelector(): PlayerController(nullptr), HUD(nullptr), bIsSelecting(false)
 {
 	// Set this component to be initialized when the game starts, and to be ticked every frame.  You can turn these features
@@ -19,19 +18,17 @@ URTSSelector::URTSSelector(): PlayerController(nullptr), HUD(nullptr), bIsSelect
 	static ConstructorHelpers::FObjectFinder<UInputAction>
 		BeginSelectionActionFinder(TEXT("/OpenRTSCamera/Inputs/BeginSelection"));
 	static ConstructorHelpers::FObjectFinder<UInputMappingContext>
-		InputMappingContextFinder(TEXT("/OpenRTSCamera/Inputs/OpenRTSCameraInputs"));
+		InputMappingContextFinder(TEXT("/OpenRTSCamera/Inputs/OpenRTSCameraInputs")); 
 	BeginSelection = BeginSelectionActionFinder.Object;
 	InputMappingContext = InputMappingContextFinder.Object;
 }
 
 
-// Called when the game starts
 void URTSSelector::BeginPlay()
 {
 	Super::BeginPlay();
 
-	const auto NetMode = GetNetMode();
-	if (NetMode != NM_DedicatedServer)
+	if (const auto NetMode = GetNetMode() != NM_DedicatedServer)
 	{
 		CollectComponentDependencyReferences();
 		BindInputMappingContext();
@@ -61,7 +58,6 @@ void URTSSelector::HandleSelectedActors_Implementation(const TArray<AActor*>& Ne
 			if (Selected && Selected->Implements<URTSSelection>())
 			{
 				IRTSSelection::Execute_OnDeselected(Selected);
-	
 			}
 		}
 	}
@@ -131,7 +127,7 @@ void URTSSelector::BindInputActions()
 	}
 }
 
-void URTSSelector::BindInputMappingContext()
+void URTSSelector::BindInputMappingContext() const
 {
 	if (PlayerController && PlayerController->GetLocalPlayer())
 	{

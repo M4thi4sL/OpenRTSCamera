@@ -5,8 +5,8 @@
 // Constructor implementation: Initializes default values.
 ARTSHUD::ARTSHUD()
 {
-	SelectionBoxColor = FLinearColor::Green;
-	SelectionBoxThickness = 1.0f;
+	SelectionBoxColor = FLinearColor::White;
+	SelectionBoxThickness = 1.5f;
 	bIsDrawingSelectionBox = false;
 	bIsPerformingSelection = false;
 }

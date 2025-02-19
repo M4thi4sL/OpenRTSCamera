@@ -1,4 +1,4 @@
-// Copyright 2024 Jesus Bracho All Rights Reserved.
+/** Copyright 2024 Jesus Bracho All Rights Reserved.  */
 
 #pragma once
 
@@ -19,27 +19,26 @@ class OPENRTSCAMERA_API URTSSelector : public UActorComponent
 public:
 	URTSSelector();
 
-	// BlueprintAssignable allows binding in Blueprints
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnActorsSelected, const TArray<AActor*>&, SelectedActors);
-	UPROPERTY(BlueprintAssignable)
+	UPROPERTY(BlueprintAssignable, BlueprintCallable, Category = "RTSCamera")
 	FOnActorsSelected OnActorsSelected;
 
-	// BlueprintReadWrite allows access and modification in Blueprints
+	/** BlueprintReadWrite allows access and modification in Blueprints */
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera - Inputs")
 	UInputMappingContext* InputMappingContext;
 
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera - Inputs")
 	UInputAction* BeginSelection;
 
-	// Function to clear selected actors, can be overridden in Blueprints
+	/** Function to clear selected actors, can be overridden in Blueprints  */
 	UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category = "RTSCamera - Selection")
 	void ClearSelectedActors();
 
-	// Function to handle selected actors, can be overridden in Blueprints
+	/** Function to handle selected actors, can be overridden in Blueprints */
 	UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category = "RTSCamera - Selection")
 	void HandleSelectedActors(const TArray<AActor*>& NewSelectedActors);
 	
-	// BlueprintCallable to allow calling from Blueprints
+	/** BlueprintCallable to allow calling from Blueprints */
 	UFUNCTION(BlueprintCallable, Category = "RTSCamera - Selection")
 	void OnSelectionStart(const FInputActionValue& Value);
 
@@ -50,7 +49,7 @@ public:
 	void OnSelectionEnd(const FInputActionValue& Value);
 
 	UPROPERTY(BlueprintReadOnly, Category = "RTSCamera - Selection")
-TArray<AActor*> SelectedActors;
+	TArray<AActor*> SelectedActors;
 
 protected:
 	virtual void BeginPlay() override;
@@ -63,12 +62,12 @@ private:
 	UPROPERTY()
 	ARTSHUD* HUD;
 
-	FVector2D SelectionStart;
-	FVector2D SelectionEnd;
+	FVector2D SelectionStart = FVector2d();
+	FVector2D SelectionEnd = FVector2d();
 
 	bool bIsSelecting;
 
 	void BindInputActions();
-	void BindInputMappingContext();
+	void BindInputMappingContext() const;
 	void CollectComponentDependencyReferences();
 };
