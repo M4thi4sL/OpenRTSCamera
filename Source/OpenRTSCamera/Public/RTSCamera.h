@@ -44,6 +44,9 @@ public:
 	void UnFollowTarget();
 
 	UFUNCTION(BlueprintCallable, Category = "RTSCamera")
+	void SetCameraZoom(const float NewZoomDistance,  const bool bSmoothLerp) ;
+
+	UFUNCTION(BlueprintCallable, Category = "RTSCamera")
 	void SetActiveCamera() const;
 
 	/** Slerps the camera position to the given position
@@ -63,9 +66,13 @@ public:
 
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera")
 	float StartingYAngle;
+
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera")
 	float StartingZAngle;
 
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera")
+	float StartingLenght;
+	
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera")
 	float MoveSpeed;
 
@@ -122,10 +129,6 @@ public:
 	UInputMappingContext* InputMappingContext;
 	
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera|Inputs")
-	UInputAction* RotateCameraLeft;
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera|Inputs")
-	UInputAction* RotateCameraRight;
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera|Inputs")
 	UInputAction* TurnCameraLeft;
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera|Inputs")
 	UInputAction* TurnCameraRight;
@@ -156,16 +159,22 @@ protected:
 
 	UPROPERTY()
 	AActor* Owner;
+	
 	UPROPERTY()
 	USceneComponent* Root;
+	
 	UPROPERTY()
 	UCameraComponent* Camera;
+	
 	UPROPERTY()
 	USpringArmComponent* SpringArm;
+	
 	UPROPERTY()
 	APlayerController* PlayerController;
+	
 	UPROPERTY()
 	AActor* BoundaryVolume;
+	
 	UPROPERTY()
 	float DesiredZoomLength;
 
@@ -184,20 +193,17 @@ private:
 	void EdgeScrollUp() const;
 	void EdgeScrollDown() const;
 
+	void SetCameraStartingTransform();
 	void FollowTargetIfSet() const;
 	void SmoothTargetArmLengthToDesiredZoom() const;
 	void ConditionallyKeepCameraAtDesiredZoomAboveGround();
 	void ConditionallyApplyCameraBounds() const;
-
-	UPROPERTY()
-	FName CameraBlockingVolumeTag;
 	
 	UPROPERTY()
 	AActor* CameraFollowTarget;
 	
 	UPROPERTY()
 	float DeltaSeconds;
-
 	
 	UPROPERTY()
 	bool IsDragging;
@@ -208,3 +214,4 @@ private:
 	UPROPERTY()
 	TArray<FMoveCameraCommand> MoveCameraCommands;
 };
+

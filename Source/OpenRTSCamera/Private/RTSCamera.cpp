@@ -7,6 +7,7 @@
 #include "Engine/World.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "RTSCameraBoundsVolume.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Runtime/CoreUObject/Public/UObject/ConstructorHelpers.h"
@@ -14,7 +15,6 @@
 URTSCamera::URTSCamera()
 {
 	PrimaryComponentTick.bCanEverTick = true;
-	CameraBlockingVolumeTag = FName("OpenRTSCamera#CameraBounds");
 	CollisionChannel = ECC_WorldStatic;
 	DragExtent = 0.6f;
 	EdgeScrollSpeed = 50;
@@ -30,6 +30,7 @@ URTSCamera::URTSCamera()
 	RotateAngle = 45;
 	StartingYAngle = -45.0f;
 	StartingZAngle = 0;
+	StartingLenght = 400.0f;
 	ZoomCatchupSpeed = 4;
 	ZoomSpeed = -200;
 
@@ -61,14 +62,15 @@ URTSCamera::URTSCamera()
 void URTSCamera::BeginPlay()
 {
 	Super::BeginPlay();
-
-	const auto NetMode = GetNetMode();
-	if (NetMode != NM_DedicatedServer)
+	if (const auto NetMode = GetNetMode() != NM_DedicatedServer)
 	{
+		/** Populate references we need + setup the desired original position */
 		CollectComponentDependencyReferences();
-		ConfigureSpringArm();
+		SetCameraStartingTransform();
+
+		/** Defer ConfigureSpringArm() to the next tick, otherwise we risk slerping our starting position */
+		GetWorld()->GetTimerManager().SetTimerForNextTick(this, &URTSCamera::ConfigureSpringArm);
 		
-		TryToFindBoundaryVolumeReference();
 		ConditionallyEnableEdgeScrolling();
 		CheckForEnhancedInputComponent();
 		BindInputMappingContext();
@@ -77,10 +79,9 @@ void URTSCamera::BeginPlay()
 }
 
 void URTSCamera::TickComponent(const float DeltaTime,const ELevelTick TickType,	FActorComponentTickFunction* ThisTickFunction)
-{
+{	
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-	const auto NetMode = GetNetMode();
-	if (NetMode != NM_DedicatedServer && PlayerController->GetViewTarget() == Owner)
+	if (const auto NetMode = GetNetMode()!= NM_DedicatedServer && PlayerController->GetViewTarget() == Owner)
 	{
 		DeltaSeconds = DeltaTime;
 		ApplyMoveCameraCommands();
@@ -100,6 +101,15 @@ void URTSCamera::FollowTarget(AActor* Target)
 void URTSCamera::UnFollowTarget()
 {
 	CameraFollowTarget = nullptr;
+}
+
+void URTSCamera::SetCameraZoom(const float NewZoomDistance , const bool bSmoothLerp)
+{
+	if (SpringArm)
+	{
+		if (bSmoothLerp) OnZoomCamera(NewZoomDistance);
+		else SpringArm->TargetArmLength = NewZoomDistance;
+	}
 }
 
 void URTSCamera::OnZoomCamera(const FInputActionValue& Value)
@@ -215,22 +225,34 @@ void URTSCamera::CollectComponentDependencyReferences()
 	Camera = Cast<UCameraComponent>(Owner->GetComponentByClass(UCameraComponent::StaticClass()));
 	SpringArm = Cast<USpringArmComponent>(Owner->GetComponentByClass(USpringArmComponent::StaticClass()));
 	PlayerController = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+	TryToFindBoundaryVolumeReference();
+}
+
+void URTSCamera::SetCameraStartingTransform()
+{
+	if (SpringArm)
+	{
+		/** We disable any lag on the springarm otherwise we will always slow lerp to the desired starting position from rel. 0,0,0 which is undersider behaviour **/
+		SpringArm->bEnableCameraLag = false;
+		SpringArm->bEnableCameraRotationLag = false;
+		SpringArm->SetRelativeRotation(FRotator::MakeFromEuler(FVector(0.0,StartingYAngle,StartingZAngle)));
+
+		DesiredZoomLength = StartingLenght;
+		SetCameraZoom(DesiredZoomLength, false);
+	}
 }
 
 void URTSCamera::ConfigureSpringArm()
 {
-	DesiredZoomLength = MaximumZoomLength;
-	SpringArm->TargetArmLength = DesiredZoomLength;
 	SpringArm->bDoCollisionTest = false;
 	SpringArm->bEnableCameraLag = EnableCameraLag;
 	SpringArm->bEnableCameraRotationLag = EnableCameraRotationLag;
-	SpringArm->SetRelativeRotation(FRotator::MakeFromEuler(FVector(0.0,StartingYAngle,StartingZAngle)));
 }
 
 void URTSCamera::TryToFindBoundaryVolumeReference()
 {
 	TArray<AActor*> BlockingVolumes;
-	UGameplayStatics::GetAllActorsOfClassWithTag(GetWorld(),AActor::StaticClass(),CameraBlockingVolumeTag,BlockingVolumes);
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(),ACameraBlockingVolume::StaticClass(),BlockingVolumes);
 
 	if (BlockingVolumes.Num() > 0)
 	{
@@ -379,6 +401,7 @@ void URTSCamera::EdgeScrollDown() const
 	Root->AddRelativeLocation(-1 * Root->GetForwardVector() * Movement * EdgeScrollSpeed * DeltaSeconds);
 }
 
+
 void URTSCamera::FollowTargetIfSet() const
 {
 	if (CameraFollowTarget != nullptr)
@@ -399,22 +422,29 @@ void URTSCamera::ConditionallyKeepCameraAtDesiredZoomAboveGround()
 		const auto RootWorldLocation = Root->GetComponentLocation();
 		const TArray<AActor*> ActorsToIgnore;
 
-		auto HitResult = FHitResult();
-		const auto DidHit = UKismetSystemLibrary::LineTraceSingle(
+		FHitResult HitResult;
+		// Define the object types to detect (Terrain)
+		TArray<TEnumAsByte<EObjectTypeQuery>> ObjectTypes;
+		ObjectTypes.Add(UEngineTypes::ConvertToObjectType(ECC_GameTraceChannel2)); // Adjust to your "Terrain" channel
+
+
+		const bool bDidHit = UKismetSystemLibrary::LineTraceSingleForObjects(
 			GetWorld(),
 			FVector(RootWorldLocation.X, RootWorldLocation.Y, RootWorldLocation.Z + FindGroundTraceLength),
 			FVector(RootWorldLocation.X, RootWorldLocation.Y, RootWorldLocation.Z - FindGroundTraceLength),
-			UEngineTypes::ConvertToTraceType(CollisionChannel),
-			true,
+			ObjectTypes,
+			true,  // Trace complex
 			ActorsToIgnore,
-			EDrawDebugTrace::Type::None,
+			EDrawDebugTrace::ForOneFrame,
 			HitResult,
-			true
+			true   // Ignore self
 		);
-
-		if (DidHit)
+		
+		if (bDidHit)
 		{
-			Root->SetWorldLocation(FVector(HitResult.Location.X,HitResult.Location.Y,HitResult.Location.Z));
+			const FVector TargetLocation = FVector(HitResult.Location.X, HitResult.Location.Y, HitResult.Location.Z);
+			const FVector SmoothedLocation = FMath::VInterpTo(RootWorldLocation, TargetLocation, DeltaSeconds, ZoomCatchupSpeed);
+			Root->SetWorldLocation(SmoothedLocation);
 		}
 	}
 }
