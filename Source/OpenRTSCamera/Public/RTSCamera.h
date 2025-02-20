@@ -95,13 +95,13 @@ public:
 	float DragExtent;
 
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera")
-	bool EnableCameraLag;
+	bool bEnableCameraLag;
 
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera")
-	bool EnableCameraRotationLag;
+	bool bEnableCameraRotationLag;
 
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera|DynamicCameraHeightSettings")
-	bool EnableDynamicCameraHeight;
+	bool bEnableDynamicCameraHeight;
 	
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera|DynamicCameraHeightSettings",meta=(EditCondition="EnableDynamicCameraHeight"))
 	TEnumAsByte<ECollisionChannel> CollisionChannel;
@@ -109,13 +109,12 @@ public:
 	UPROPERTY(BlueprintReadWrite,EditAnywhere,Category = "RTSCamera|DynamicCameraHeightSettings",meta=(EditCondition="EnableDynamicCameraHeight"))
 	float FindGroundTraceLength;
 
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera|DynamicCameraHeightSettings", meta=(EditCondition="EnableDynamicCameraHeight"))
+	float TickRate = 0.1f;
+	
 	/** Should the camera support edgescrolling behaviour? */
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera|EdgeScrollSettings")
 	bool EnableEdgeScrolling;
-	
-	/** Attempts to keep the viewport within the bounds of the blocking volume. So that the viewport never extends out of the desired volume */
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera|EdgeScrollSettings",meta=(EditCondition="EnableEdgeScrolling"))
-	bool bKeepViewportWithinBounds = true;
 	
 	UPROPERTY(BlueprintReadWrite,EditAnywhere,Category = "RTSCamera|EdgeScrollSettings",meta=(EditCondition="EnableEdgeScrolling"))
 	float EdgeScrollSpeed;
@@ -141,6 +140,9 @@ public:
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "RTSCamera|Inputs")
 	UInputAction* ZoomCamera;
 
+	UPROPERTY()
+	FTimerHandle HeightTraceTimerHandle;
+	
 protected:
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime,ELevelTick TickType,FActorComponentTickFunction* ThisTickFunction) override;
@@ -188,17 +190,17 @@ private:
 	void BindInputActions();
 
 	void ConditionallyPerformEdgeScrolling() const;
-	void EdgeScrollLeft() const;
-	void EdgeScrollRight() const;
-	void EdgeScrollUp() const;
-	void EdgeScrollDown() const;
+	void EdgeScrollLeft(const FVector2D MousePosition, const FVector2D ViewportSize) const;
+	void EdgeScrollRight(const FVector2D MousePosition, const FVector2D ViewportSize) const;
+	void EdgeScrollUp(const FVector2D MousePosition, const FVector2D ViewportSize) const;
+	void EdgeScrollDown(const FVector2D MousePosition, const FVector2D ViewportSize) const;
 
 	void SetCameraStartingTransform();
 	void FollowTargetIfSet() const;
 	void SmoothTargetArmLengthToDesiredZoom() const;
-	void ConditionallyKeepCameraAtDesiredZoomAboveGround();
-	void ConditionallyApplyCameraBounds() const;
-	
+	void KeepCameraAtDesiredZoomAboveGround();
+	FVector GetClampedCameraPosition(const FVector& TargetLocation) const;
+
 	UPROPERTY()
 	AActor* CameraFollowTarget;
 	

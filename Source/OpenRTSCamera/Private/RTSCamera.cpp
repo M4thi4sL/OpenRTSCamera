@@ -19,9 +19,9 @@ URTSCamera::URTSCamera()
 	DragExtent = 0.6f;
 	EdgeScrollSpeed = 50;
 	DistanceFromEdgeThreshold = 0.1f;
-	EnableCameraLag = true;
-	EnableCameraRotationLag = true;
-	EnableDynamicCameraHeight = true;
+	bEnableCameraLag = true;
+	bEnableCameraRotationLag = true;
+	bEnableDynamicCameraHeight = true;
 	EnableEdgeScrolling = true;
 	FindGroundTraceLength = 100000;
 	MaximumZoomLength = 5000;
@@ -64,6 +64,11 @@ void URTSCamera::BeginPlay()
 	Super::BeginPlay();
 	if (const auto NetMode = GetNetMode() != NM_DedicatedServer)
 	{
+		/** Reserve memory for movement commands so we dont have to allocate it at runtime
+		 * we create a large enough buffer so that push / remove should rarely exceed it
+		 */
+		MoveCameraCommands.Reserve(10);
+
 		/** Populate references we need + setup the desired original position */
 		CollectComponentDependencyReferences();
 		SetCameraStartingTransform();
@@ -86,10 +91,9 @@ void URTSCamera::TickComponent(const float DeltaTime,const ELevelTick TickType,	
 		DeltaSeconds = DeltaTime;
 		ApplyMoveCameraCommands();
 		ConditionallyPerformEdgeScrolling();
-		ConditionallyKeepCameraAtDesiredZoomAboveGround();
 		SmoothTargetArmLengthToDesiredZoom();
 		FollowTargetIfSet();
-		ConditionallyApplyCameraBounds();
+		KeepCameraAtDesiredZoomAboveGround();
 	}
 }
 
@@ -119,14 +123,12 @@ void URTSCamera::OnZoomCamera(const FInputActionValue& Value)
 
 void URTSCamera::OnRotateCameraLeft(const FInputActionValue& Value)
 {
-	const auto WorldRotation = Root->GetComponentRotation();
-	Root->SetWorldRotation(FRotator::MakeFromEuler(FVector(WorldRotation.Euler().X,	WorldRotation.Euler().Y,WorldRotation.Euler().Z -  Value.Get<float>())));
+	Root->AddWorldRotation(FRotator(0, -Value.Get<float>(), 0));
 }
 
 void URTSCamera::OnRotateCameraRight(const FInputActionValue& Value)
 {
-	const auto WorldRotation = Root->GetComponentRotation();
-	Root->SetWorldRotation(FRotator::MakeFromEuler(FVector(WorldRotation.Euler().X,	WorldRotation.Euler().Y,WorldRotation.Euler().Z +  Value.Get<float>())));
+	Root->AddWorldRotation(FRotator(0, Value.Get<float>(), 0));
 }
 
 void URTSCamera::OnTurnCameraLeft(const FInputActionValue& Value)
@@ -207,15 +209,40 @@ void URTSCamera::RequestMoveCamera(const float X, const float Y, const float Sca
 
 void URTSCamera::ApplyMoveCameraCommands()
 {
+	FVector NewLocation = Root->GetComponentLocation();
+
 	for (const auto& [X, Y, Scale] : MoveCameraCommands)
 	{
 		auto Movement = FVector2D(X, Y);
 		Movement.Normalize();
 		Movement *= MoveSpeed * Scale * DeltaSeconds;
-		Root->SetWorldLocation(Root->GetComponentLocation() + FVector(Movement.X, Movement.Y, 0.0f));
+
+		NewLocation += FVector(Movement.X, Movement.Y, 0.0f);
 	}
 
+	// Clamp the new location BEFORE setting it
+	NewLocation = GetClampedCameraPosition(NewLocation);
+
+	Root->SetWorldLocation(NewLocation);
 	MoveCameraCommands.Empty();
+}
+
+FVector URTSCamera::GetClampedCameraPosition(const FVector& TargetLocation) const
+{
+	if (BoundaryVolume)
+	{
+		FVector Origin, Extents;
+		BoundaryVolume->GetActorBounds(false, Origin, Extents);
+
+		return FVector(
+			FMath::Clamp(TargetLocation.X, Origin.X - Extents.X, Origin.X + Extents.X),
+			FMath::Clamp(TargetLocation.Y, Origin.Y - Extents.Y, Origin.Y + Extents.Y),
+			TargetLocation.Z // Keep Z unchanged
+		);
+	}
+
+	// If no boundary volume exists, return the original location
+	return TargetLocation;
 }
 
 void URTSCamera::CollectComponentDependencyReferences()
@@ -245,8 +272,8 @@ void URTSCamera::SetCameraStartingTransform()
 void URTSCamera::ConfigureSpringArm()
 {
 	SpringArm->bDoCollisionTest = false;
-	SpringArm->bEnableCameraLag = EnableCameraLag;
-	SpringArm->bEnableCameraRotationLag = EnableCameraRotationLag;
+	SpringArm->bEnableCameraLag = bEnableCameraLag;
+	SpringArm->bEnableCameraRotationLag = bEnableCameraRotationLag;
 }
 
 void URTSCamera::TryToFindBoundaryVolumeReference()
@@ -328,7 +355,6 @@ void URTSCamera::BindInputActions()
 			EnhancedInputComponent->BindAction(TurnCameraLeft,ETriggerEvent::Canceled,this,	&URTSCamera::OnTurnCameraLeft);
 			EnhancedInputComponent->BindAction(TurnCameraRight,ETriggerEvent::Canceled,this,&URTSCamera::OnTurnCameraRight);
 		}
-
 		EnhancedInputComponent->BindAction(MoveCameraXAxis,ETriggerEvent::Triggered,this,&URTSCamera::OnMoveCameraXAxis);
 		EnhancedInputComponent->BindAction(MoveCameraYAxis,ETriggerEvent::Triggered,this,&URTSCamera::OnMoveCameraYAxis);
 		EnhancedInputComponent->BindAction(DragCamera,ETriggerEvent::Triggered,this,&URTSCamera::OnDragCamera);
@@ -354,59 +380,57 @@ void URTSCamera::ConditionallyPerformEdgeScrolling() const
 {
 	if (EnableEdgeScrolling && !IsDragging)
 	{
-		EdgeScrollLeft();
-		EdgeScrollRight();
-		EdgeScrollUp();
-		EdgeScrollDown();
+		UWorld* World = GetWorld();
+		const FVector2D MousePosition = UWidgetLayoutLibrary::GetMousePositionOnViewport(World);
+		const FVector2D ViewportSize = UWidgetLayoutLibrary::GetViewportWidgetGeometry(World).GetLocalSize();
+
+		EdgeScrollLeft(MousePosition, ViewportSize);
+		EdgeScrollRight(MousePosition, ViewportSize);
+		EdgeScrollUp(MousePosition, ViewportSize);
+		EdgeScrollDown(MousePosition, ViewportSize);
 	}
 }
 
-void URTSCamera::EdgeScrollLeft() const
+void URTSCamera::EdgeScrollLeft(const FVector2D MousePosition, const FVector2D ViewportSize) const
 {
-	const auto MousePosition = UWidgetLayoutLibrary::GetMousePositionOnViewport(GetWorld());
-	const auto ViewportSize = UWidgetLayoutLibrary::GetViewportWidgetGeometry(GetWorld()).GetLocalSize();
-	const auto NormalizedMousePosition = 1 - UKismetMathLibrary::NormalizeToRange(MousePosition.X,0.0f,ViewportSize.X * DistanceFromEdgeThreshold);
-
+	const auto NormalizedMousePosition = 1 - UKismetMathLibrary::NormalizeToRange(MousePosition.X, 0.0f, ViewportSize.X * DistanceFromEdgeThreshold);
 	const auto Movement = UKismetMathLibrary::FClamp(NormalizedMousePosition, 0.0, 1.0);
 	Root->AddRelativeLocation(-1 * Root->GetRightVector() * Movement * EdgeScrollSpeed * DeltaSeconds);
 }
 
-void URTSCamera::EdgeScrollRight() const
+void URTSCamera::EdgeScrollRight(const FVector2D MousePosition, const FVector2D ViewportSize) const
 {
-	const auto MousePosition = UWidgetLayoutLibrary::GetMousePositionOnViewport(GetWorld());
-	const auto ViewportSize = UWidgetLayoutLibrary::GetViewportWidgetGeometry(GetWorld()).GetLocalSize();
 	const auto NormalizedMousePosition = UKismetMathLibrary::NormalizeToRange(MousePosition.X,ViewportSize.X * (1 - DistanceFromEdgeThreshold),	ViewportSize.X	);
-
 	const auto Movement = UKismetMathLibrary::FClamp(NormalizedMousePosition, 0.0, 1.0);
 	Root->AddRelativeLocation(Root->GetRightVector() * Movement * EdgeScrollSpeed * DeltaSeconds);
 }
 
-void URTSCamera::EdgeScrollUp() const
+void URTSCamera::EdgeScrollUp(const FVector2D MousePosition, const FVector2D ViewportSize) const
 {
-	const auto MousePosition = UWidgetLayoutLibrary::GetMousePositionOnViewport(GetWorld());
-	const auto ViewportSize = UWidgetLayoutLibrary::GetViewportWidgetGeometry(GetWorld()).GetLocalSize();
 	const auto NormalizedMousePosition = UKismetMathLibrary::NormalizeToRange(MousePosition.Y,	0.0f,ViewportSize.Y * DistanceFromEdgeThreshold);
-
 	const auto Movement = 1 - UKismetMathLibrary::FClamp(NormalizedMousePosition, 0.0, 1.0);
 	Root->AddRelativeLocation(Root->GetForwardVector() * Movement * EdgeScrollSpeed * DeltaSeconds);
 }
 
-void URTSCamera::EdgeScrollDown() const
+void URTSCamera::EdgeScrollDown(const FVector2D MousePosition, const FVector2D ViewportSize) const
 {
-	const auto MousePosition = UWidgetLayoutLibrary::GetMousePositionOnViewport(GetWorld());
-	const auto ViewportSize = UWidgetLayoutLibrary::GetViewportWidgetGeometry(GetWorld()).GetLocalSize();
 	const auto NormalizedMousePosition = UKismetMathLibrary::NormalizeToRange(MousePosition.Y,ViewportSize.Y * (1 - DistanceFromEdgeThreshold),ViewportSize.Y);
-
 	const auto Movement = UKismetMathLibrary::FClamp(NormalizedMousePosition, 0.0, 1.0);
 	Root->AddRelativeLocation(-1 * Root->GetForwardVector() * Movement * EdgeScrollSpeed * DeltaSeconds);
 }
 
-
 void URTSCamera::FollowTargetIfSet() const
 {
-	if (CameraFollowTarget != nullptr)
+	if (CameraFollowTarget)
 	{
-		Root->SetWorldLocation(CameraFollowTarget->GetActorLocation());
+		const FVector TargetLocation = CameraFollowTarget->GetActorLocation();
+		const FVector SmoothedLocation = FMath::VInterpTo(
+			Root->GetComponentLocation(), 
+			TargetLocation,              
+			DeltaSeconds,                
+			ZoomCatchupSpeed                         
+		);
+		Root->SetWorldLocation(SmoothedLocation);
 	}
 }
 
@@ -415,18 +439,16 @@ void URTSCamera::SmoothTargetArmLengthToDesiredZoom() const
 	SpringArm->TargetArmLength = FMath::FInterpTo(SpringArm->TargetArmLength,DesiredZoomLength,DeltaSeconds,ZoomCatchupSpeed);
 }
 
-void URTSCamera::ConditionallyKeepCameraAtDesiredZoomAboveGround()
+void URTSCamera::KeepCameraAtDesiredZoomAboveGround()
 {
-	if (EnableDynamicCameraHeight)
+	if (bEnableDynamicCameraHeight)
 	{
 		const auto RootWorldLocation = Root->GetComponentLocation();
 		const TArray<AActor*> ActorsToIgnore;
 
 		FHitResult HitResult;
-		// Define the object types to detect (Terrain)
 		TArray<TEnumAsByte<EObjectTypeQuery>> ObjectTypes;
-		ObjectTypes.Add(UEngineTypes::ConvertToObjectType(ECC_GameTraceChannel2)); // Adjust to your "Terrain" channel
-
+		ObjectTypes.Add(UEngineTypes::ConvertToObjectType(CollisionChannel)); 
 
 		const bool bDidHit = UKismetSystemLibrary::LineTraceSingleForObjects(
 			GetWorld(),
@@ -439,29 +461,12 @@ void URTSCamera::ConditionallyKeepCameraAtDesiredZoomAboveGround()
 			HitResult,
 			true   // Ignore self
 		);
-		
+	
 		if (bDidHit)
 		{
 			const FVector TargetLocation = FVector(HitResult.Location.X, HitResult.Location.Y, HitResult.Location.Z);
 			const FVector SmoothedLocation = FMath::VInterpTo(RootWorldLocation, TargetLocation, DeltaSeconds, ZoomCatchupSpeed);
 			Root->SetWorldLocation(SmoothedLocation);
 		}
-	}
-}
-
-void URTSCamera::ConditionallyApplyCameraBounds() const
-{
-	if (BoundaryVolume != nullptr)
-	{
-		const auto RootWorldLocation = Root->GetComponentLocation();
-		FVector Origin;
-		FVector Extents;
-		BoundaryVolume->GetActorBounds(false, Origin, Extents);
-		Root->SetWorldLocation(FVector(
-				UKismetMathLibrary::Clamp(RootWorldLocation.X, Origin.X - Extents.X, Origin.X + Extents.X),
-				UKismetMathLibrary::Clamp(RootWorldLocation.Y, Origin.Y - Extents.Y, Origin.Y + Extents.Y),
-				RootWorldLocation.Z
-			)
-		);
 	}
 }
